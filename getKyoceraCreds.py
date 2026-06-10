@@ -21,12 +21,26 @@ import re
 import sys
 import time
 import warnings
+import xml.dom.minidom
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import requests
 import xmltodict
 
 warnings.filterwarnings("ignore")
+
+
+def _pretty_xml(raw: bytes) -> str:
+    try:
+        dom = xml.dom.minidom.parseString(raw)
+        pretty = dom.toprettyxml(indent="  ")
+        # minidom добавляет лишнюю <?xml?> строку — убираем дубль если она уже есть
+        lines = pretty.splitlines()
+        if lines and lines[0].startswith("<?xml"):
+            lines = lines[1:]
+        return "\n".join(line for line in lines if line.strip())
+    except Exception:
+        return raw.decode("utf-8", errors="replace")
 
 
 class Reporter:
@@ -101,7 +115,7 @@ def request_enumeration(url: str, headers: Dict[str, str], debug: bool = False) 
     )
     response = requests.post(url, data=body, headers=headers, verify=False)
     if debug:
-        print(f"[DEBUG] enumeration raw response:\n{response.content.decode('utf-8', errors='replace')}\n")
+        print(f"[DEBUG] enumeration response:\n{_pretty_xml(response.content)}\n")
     parsed = xmltodict.parse(response.content.decode("utf-8"))
     soap_body = (parsed.get("SOAP-ENV:Envelope") or {}).get("SOAP-ENV:Body") or {}
     enum_response = _find_by_local(soap_body, "create_personal_address_enumerationResponse")
@@ -120,7 +134,7 @@ def request_address_list(url: str, headers: Dict[str, str], enumeration: str, de
     )
     response = requests.post(url, data=body, headers=headers, verify=False)
     if debug:
-        print(f"[DEBUG] address_list raw response:\n{response.content.decode('utf-8', errors='replace')}\n")
+        print(f"[DEBUG] address_list response:\n{_pretty_xml(response.content)}\n")
     return xmltodict.parse(response.content.decode("utf-8"))
 
 
