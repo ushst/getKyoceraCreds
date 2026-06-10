@@ -109,13 +109,20 @@ def request_address_list(url: str, headers: Dict[str, str], enumeration: str):
     return xmltodict.parse(response.content.decode("utf-8"))
 
 
+def _local_name(key: str) -> str:
+    return key.split(":")[-1] if ":" in key else key
+
+
 def find_credential_entries(data) -> List[Dict[str, str]]:
+    """Walk parsed XML (xmltodict preserves 'ns:key' prefixes) and collect any
+    dict that contains at least one credential-bearing field."""
     entries: List[Dict[str, str]] = []
+    target_local = {"login_name", "user_name", "login_password", "email_address", "emailaddress"}
 
     def walk(obj):
         if isinstance(obj, dict):
-            keys = set(obj.keys())
-            if keys & {"login_name", "login_password", "email_address", "emailaddress"}:
+            local_keys = {_local_name(k) for k in obj.keys()}
+            if local_keys & target_local:
                 entries.append(obj)
             for value in obj.values():
                 walk(value)
@@ -214,9 +221,10 @@ def display_entries(entries: Iterable[Dict[str, str]], reporter: Reporter) -> No
         for key, value in entry.items():
             if isinstance(value, (dict, list)):
                 continue
-            formatted = _format_value(key, value)
+            label = _local_name(key)
+            formatted = _format_value(label, value)
             if formatted:
-                reporter.write(f"    {key}: {formatted}")
+                reporter.write(f"    {label}: {formatted}")
         reporter.write()
 
 

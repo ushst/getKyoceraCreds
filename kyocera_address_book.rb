@@ -209,6 +209,6 @@ class MetasploitModule < Msf::Auxiliary
   end
 
   def highlight_password(value)
-    datastore['ConsoleDriver'] ? "\e[91m!! ПАРОЛЬ: #{value} !!\e[0m" : "!! ПАРОЛЬ: #{value} !!"
+    "\e[91m!! ПАРОЛЬ: #{value} !!\e[0m"
   end
 end
